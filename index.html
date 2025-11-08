@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8"/>
-  <title>Speaklo Tala Demo</title>
+  <title>Speaklo Tala Demo — Fixed Mic Start/Stop</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/bodymovin/5.9.6/lottie.min.js"></script>
   <style>
     body{font-family:Inter,Arial;display:flex;align-items:center;justify-content:center;height:100vh;background:#f5fbff;margin:0}
@@ -12,6 +12,7 @@
     .controls{margin-top:14px;display:flex;gap:10px;justify-content:center}
     button{padding:10px 14px;border-radius:10px;border:none;background:#0a1f44;color:#fff;font-weight:700;cursor:pointer}
     .small{background:transparent;color:#0a1f44;border:2px solid #0a1f44}
+    .note{font-size:12px;color:#556;text-align:center;margin-top:10px}
   </style>
 </head>
 <body>
@@ -24,50 +25,82 @@
       <button id="stopMic" class="small">Stop Mic</button>
     </div>
     <p style="color:#0a1f44;font-weight:600;margin-top:12px">Speaklo — Tala (Energetic)</p>
+    <div class="note">If the mic doesn't start, check browser microphone permission and that the page is served over HTTPS.</div>
   </div>
 
 <script>
-  // Lottie JSON file must be in the same folder and named speaklo_tala.json
-  const LOTTIE_JSON = 'speaklo_tala.json';
-  const animContainer = document.getElementById('anim');
-  const anim = lottie.loadAnimation({
-    container: animContainer,
-    renderer: 'svg',
-    loop: true,
-    autoplay: true,
-    path: LOTTIE_JSON
-  });
+/* ---------- Lottie (you must provide speaklo_tala.json or change path) ---------- */
+const LOTTIE_JSON = 'speaklo_tala.json';
+const anim = lottie.loadAnimation({
+  container: document.getElementById('anim'),
+  renderer: 'svg',
+  loop: true,
+  autoplay: true,
+  path: LOTTIE_JSON
+});
 
-  // TTS welcome
-  document.getElementById('welcome').onclick = () => {
-    const text = "Hi — I'm Tala, your Speaklo coach. Ready for three minutes of practice?";
-    const u = new SpeechSynthesisUtterance(text);
-    u.rate = 0.95; u.pitch = 1;
-    const voices = speechSynthesis.getVoices();
-    const en = voices.find(v => v.lang.startsWith('en')) || voices[0];
-    if(en) u.voice = en;
-    speechSynthesis.cancel();
-    speechSynthesis.speak(u);
-  };
+/* ---------- TTS welcome ---------- */
+document.getElementById('welcome').onclick = () => {
+  const text = "Hi — I'm Tala, your Speaklo coach. Ready for three minutes of practice?";
+  const u = new SpeechSynthesisUtterance(text);
+  u.rate = 0.95; u.pitch = 1;
+  const voices = speechSynthesis.getVoices();
+  const en = voices.find(v => v.lang && v.lang.startsWith('en')) || voices[0];
+  if (en) u.voice = en;
+  speechSynthesis.cancel();
+  speechSynthesis.speak(u);
+};
 
-  // Mic -> mouth animation
-  let audioCtx, analyser, micStream, rafId;
-  const mouth = document.getElementById('mouth');
+/* ---------- Robust mic start/stop ---------- */
+let audioCtx = null;
+let analyser = null;
+let sourceNode = null;
+let micStream = null;
+let rafId = null;
+const mouth = document.getElementById('mouth');
 
-  async function startMic() {
-    if (micStream) return;
+async function createAudioContextIfNeeded() {
+  if (!audioCtx || audioCtx.state === 'closed') {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    console.log('AudioContext created', audioCtx);
+  } else {
+    // resume if suspended
+    if (audioCtx.state === 'suspended') {
+      try { await audioCtx.resume(); console.log('AudioContext resumed'); } catch(e){ console.warn(e); }
+    }
+  }
+}
+
+/* Start microphone and animate mouth */
+async function startMic() {
+  try {
+    // If already running, ignore
+    if (micStream) {
+      console.log('Mic already started');
+      return;
+    }
+
+    // Request microphone permission & stream
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     micStream = stream;
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const source = audioCtx.createMediaStreamSource(stream);
+
+    // Create or resume AudioContext
+    await createAudioContextIfNeeded();
+
+    // Create source and analyser
+    sourceNode = audioCtx.createMediaStreamSource(stream);
     analyser = audioCtx.createAnalyser();
     analyser.fftSize = 256;
-    source.connect(analyser);
+    sourceNode.connect(analyser);
+
     const data = new Uint8Array(analyser.frequencyBinCount);
 
+    // animation tick
     function tick() {
+      if (!analyser) return;
       analyser.getByteFrequencyData(data);
-      let sum = 0; for(let i=0;i<data.length;i++) sum += data[i]*data[i];
+      let sum = 0;
+      for (let i=0;i<data.length;i++) sum += data[i]*data[i];
       const rms = Math.sqrt(sum / data.length);
       const h = Math.max(10, Math.min(56, 14 + (rms/3)));
       mouth.style.height = h + 'px';
@@ -75,98 +108,64 @@
       rafId = requestAnimationFrame(tick);
     }
     tick();
+
+    console.log('Mic started');
+  } catch (err) {
+    console.error('Error starting mic:', err);
+    micStream = null;
+    // helpful UI message
+    alert('Cannot access microphone. Please allow microphone permission and ensure the page is served over HTTPS.');
   }
+}
 
-  async function stopMic() {
-    if(rafId) cancelAnimationFrame(rafId);
-    if(analyser) analyser.disconnect();
-    if(audioCtx) audioCtx.close();
-    if(micStream){ micStream.getTracks().forEach(t => t.stop()); micStream = null; }
-    mouth.style.height = '16px'; mouth.style.transform = 'translateX(-50%) scaleX(1)';
+/* Stop microphone and cleanup */
+function stopMic() {
+  try {
+    // cancel RAF
+    if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
 
-    // after stopping mic, trigger in-browser STT & reply (Web Speech API)
-    // This uses SpeechRecognition (Chrome). If unsupported, fallback to echo reply.
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition || null;
-    if (SpeechRecognition) {
-      try {
-        const recognition = new SpeechRecognition();
-        recognition.lang = 'en-US';
-        recognition.interimResults = false;
-        recognition.maxAlternatives = 1;
-        recognition.onresult = (event) => {
-          const transcript = event.results[0][0].transcript;
-          console.log('Transcript:', transcript);
-          // build a simple reply (replace with server LLM call for real corrections)
-          const reply = `I heard: "${transcript}". Nice! Try repeating with a little more pace.`;
-          robotSpeak(reply, 0.9, 'en-US');
-          showCorrectionUI(transcript, reply);
-        };
-        recognition.onerror = (e) => {
-          console.warn('Recognition error', e);
-          robotSpeak("Sorry, I couldn't hear that clearly. Try again please.");
-        };
-        recognition.onend = () => { console.log('Recognition ended'); };
-        recognition.start();
-      } catch (err) {
-        console.warn('SpeechRecognition error', err);
-        robotSpeak("Speech recognition not supported here.");
-      }
-    } else {
-      robotSpeak("I can't transcribe here, but you're doing great. Keep practicing!");
+    // disconnect analyser/source
+    if (analyser) {
+      try { analyser.disconnect(); } catch(e){/*ignore*/ }
+      analyser = null;
     }
-  }
-
-  document.getElementById('startMic').onclick = startMic;
-  document.getElementById('stopMic').onclick = stopMic;
-
-  // robotSpeak + mouth animation during TTS
-  function animateMouthDuring(ttsUtterance) {
-    const mouthEl = document.getElementById('mouth');
-    let animInterval;
-    ttsUtterance.onstart = () => {
-      let grow = 0;
-      animInterval = setInterval(()=>{
-        const h = 16 + 8 * (0.5 + Math.sin(Date.now()/80 + (grow++ % 10)));
-        mouthEl.style.height = Math.max(10, Math.min(56, h)) + 'px';
-        mouthEl.style.transform = `translateX(-50%) scaleX(${1 + ((grow % 6)/10)})`;
-      }, 60);
-    };
-    ttsUtterance.onend = () => {
-      clearInterval(animInterval);
-      mouthEl.style.height = '16px';
-      mouthEl.style.transform = 'translateX(-50%) scaleX(1)';
-    };
-  }
-
-  function robotSpeak(text, rate=0.9, lang='en-US') {
-    const u = new SpeechSynthesisUtterance(text);
-    u.rate = rate;
-    u.lang = lang;
-    const vlist = speechSynthesis.getVoices();
-    const v = vlist.find(v=>v.lang.startsWith('en')) || vlist[0];
-    if(v) u.voice = v;
-    animateMouthDuring(u);
-    speechSynthesis.cancel();
-    speechSynthesis.speak(u);
-  }
-
-  // UI show correction
-  function showCorrectionUI(orig, reply) {
-    let container = document.getElementById('correction');
-    if(!container) {
-      container = document.createElement('div');
-      container.id = 'correction';
-      container.style.marginTop = '12px';
-      container.style.fontSize = '14px';
-      container.style.color = '#0a1f44';
-      document.querySelector('.card').appendChild(container);
+    if (sourceNode) {
+      try { sourceNode.disconnect(); } catch(e){/*ignore*/ }
+      sourceNode = null;
     }
-    container.innerHTML = `<div style="text-align:left"><strong>You said:</strong><div style="background:#f1f5f9;padding:8px;border-radius:8px;margin-top:6px">${escapeHtml(orig)}</div>
-  <strong style="margin-top:8px;display:block">Speaklo says:</strong>
-  <div style="background:#e6fffa;padding:8px;border-radius:8px;margin-top:6px">${escapeHtml(reply)}</div></div>`;
-  }
-  function escapeHtml(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
 
+    // stop media tracks
+    if (micStream) {
+      micStream.getTracks().forEach(t => {
+        try { t.stop(); } catch(e){/*ignore*/}
+      });
+      micStream = null;
+    }
+
+    // prefer to suspend rather than close for cross-browser stability
+    if (audioCtx && audioCtx.state !== 'closed') {
+      audioCtx.suspend().then(() => console.log('audioCtx suspended')).catch(()=>{});
+      // do not close to avoid recreate issues on some browsers
+    }
+
+    // reset mouth to idle
+    mouth.style.height = '16px';
+    mouth.style.transform = 'translateX(-50%) scaleX(1)';
+
+    console.log('Mic stopped & cleaned up');
+  } catch (e) {
+    console.warn('stopMic cleanup error', e);
+  }
+}
+
+/* Buttons */
+document.getElementById('startMic').onclick = startMic;
+document.getElementById('stopMic').onclick = stopMic;
+
+/* Extra: when page unload, make sure to stop everything */
+window.addEventListener('beforeunload', () => {
+  try { stopMic(); if (audioCtx && audioCtx.state !== 'closed') audioCtx.close(); } catch(e){}
+});
 </script>
 </body>
 </html>
