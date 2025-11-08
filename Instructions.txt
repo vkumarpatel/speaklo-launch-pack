@@ -1,0 +1,16 @@
+Local test:
+1. Put these files in a folder: index.html, speaklo_logo.svg, microcopy_speaklo.txt.
+2. Download a free Lottie JSON from LottieFiles (search: "character celebrate confetti lottie") and save as speaklo_tala.json in the same folder.
+3. Open index.html in Chrome (desktop) or use a local server (e.g., `npx serve .`) for best microphone permissions.
+
+Host on Vercel:
+1. Create a GitHub repo and push these files.
+2. Connect the repo to Vercel and deploy (free plan).
+3. Share yourproject.vercel.app and test on Android Chrome. Use 'Add to Home screen' to install PWA.
+
+Play Store:
+1. Wrap the PWA using Trusted Web Activity or Capacitor and build AAB.
+2. Pay Google Developer one-time fee (₹2,500) and submit.
+
+Replace avatars:
+- To change Tala, download another Lottie JSON and save with same filename speaklo_tala.json.
